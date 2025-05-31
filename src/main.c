@@ -83,14 +83,13 @@ int main() {
                 char num_blocks_str[20];
                 snprintf(num_blocks_str, sizeof(num_blocks_str), "%d\n", chain->nblocks);
                 send(new_socket, num_blocks_str, strlen(num_blocks_str), 0);
-                printf("Sent number of blocks: %d\n", chain->nblocks);
+                printf("[SERVER] Sent number of blocks: %d\n", chain->nblocks);
                 for (int i = 0; i < chain->nblocks; i++) {
                     Block *block = chain->blocks[i];
                     if (block == NULL) {
                         fprintf(stderr, "Warning: NULL block found at index %d in chain.\n", i);
                         continue;
                     }
-
 
                     char msgbuf[9128];
                     int len = serialize_block(block, msgbuf, sizeof(msgbuf));
@@ -103,7 +102,7 @@ int main() {
                     char block_len_str[20];
                     snprintf(block_len_str, sizeof(block_len_str), "%d\n", len);
                     send(new_socket, block_len_str, strlen(block_len_str), 0);
-                    printf("Sent block %d length: %d\n", block->index, len);
+                    printf("[SERVER] Sent block %d length: %d\n", block->index, len);
 
                     send(new_socket, msgbuf, strlen(msgbuf), 0);
                     printf("[SERVER] Sent message to client.\n");

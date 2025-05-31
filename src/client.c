@@ -73,7 +73,7 @@ int main() {
 
         if (strcmp(client_command, GET_BLOCKCHAIN_CMD) == 0) {
 
-            printf("Requesting blockchain dump...\n");
+            printf("[CLIENT] Requesting blockchain dump...\n");
             send(sock, GET_BLOCKCHAIN_CMD, strlen(GET_BLOCKCHAIN_CMD), 0);
 
             ssize_t bytes_read = read_line(sock, line_buffer, sizeof(line_buffer));
@@ -83,7 +83,7 @@ int main() {
                 exit(EXIT_FAILURE);
             }
             int num_blocks = atoi(line_buffer);
-            printf("Server reports %d blocks.\n", num_blocks);
+            printf("[CLIENT] Server reports %d blocks.\n", num_blocks);
 
             for (int i = 0; i < num_blocks; i++) {
 
@@ -93,7 +93,7 @@ int main() {
                     break;
                 }
                 int block_len = atoi(line_buffer);
-                printf("Receiving block %d (length %d bytes)...\n", i, block_len);
+                printf("[CLIENT] Receiving block %d (length %d bytes)...\n", i, block_len);
 
                 if (block_len > 0) {
                     if (block_len >= BUFFER_SIZE) {
@@ -111,16 +111,16 @@ int main() {
                         total_received += bytes_read;
                     }
                     buffer[total_received] = '\0';
-                    printf("--- Received Block %d ---\n%s\n----------------------\n", i, buffer);
+                    printf("[CLIENT] --- Received Block %d ---\n%s\n----------------------\n", i, buffer);
                 } else {
-                    printf("Block %d is empty or failed to serialize on server.\n", i);
+                    printf("[CLIENT] Block %d is empty or failed to serialize on server.\n", i);
                 }
             }
 
             bytes_read = read(sock, buffer, BUFFER_SIZE - 1);
             if (bytes_read > 0) {
                 buffer[bytes_read] = '\0';
-                printf("Server final response: %s\n", buffer);
+                printf("[CLIENT] Server final response: %s\n", buffer);
             }
 
         } else {
