@@ -4,7 +4,7 @@
 
 #include "chain.h"
 
-static const char* GENESIS_DATA = "\nWHAT I BRING IS LIGHT\nWHAT I BRING IS A STAR\nWHAT I BRING IS\nAN ANCIENT SEA\0";
+static const char* GENESIS_DATA = "WHAT I BRING IS LIGHT\nWHAT I BRING IS A STAR\nWHAT I BRING IS\nAN ANCIENT SEA";
 
 Chain* create_chain() {
     Chain *chain = (Chain*) malloc(sizeof(Chain));
@@ -20,7 +20,7 @@ Chain* create_chain() {
         chain->blocks[i] = NULL;
     }
 
-    Block* genesis = create_block(NULL, GENESIS_DATA, sizeof(GENESIS_DATA));
+    Block* genesis = create_block(NULL, GENESIS_DATA, strlen(GENESIS_DATA));
     if (genesis == NULL) {
         free(chain);
         return NULL;
@@ -32,6 +32,8 @@ Chain* create_chain() {
         free(chain);
         return NULL;
     }
+
+    return chain;
 }
 
 int add_block(Chain* chain, Block* block) {
@@ -46,7 +48,7 @@ int add_block(Chain* chain, Block* block) {
     }
 
     if (chain->nblocks >= MAX_BLOCKS) {
-        fprintf(stderr, "Error: Blockchain is full, cannot add more blocks.\n");
+        fprintf(stderr, "Error: Chain is full, cannot add more blocks\n");
         return -1;
     }
 
@@ -59,47 +61,13 @@ void free_chain(Chain* chain) {
         return; // Nothing to free
     }
 
-    Block* current = chain->head;
-    Block* next;
-
-    while (current != NULL) {
-        next = current->next;
-        free(current);
-        current = next;
+    // Free all the blocks
+    for (int i = 0; i < chain->nblocks; i++) {
+        if (chain->blocks[i] != NULL) {
+            free(chain->blocks[i]);
+        }
     }
 
+    // Free the chain
     free(chain);
 }
-
-// int main(void) {
-//     Chain *c = (Chain*) malloc(sizeof(Chain));
-
-//     if (c == NULL) {
-//         perror("Failed to allocate memory for blockchain");
-//         exit(1);
-//     }
-
-//     init_chain(c);
-
-//     transact(c, "Hello World!");
-//     transact(c, "foo");
-//     transact(c, "bar");
-//     transact(c, "baz");
-
-//     Block* block = c->head;
-//     while (block != NULL) {
-//         printf("=====================================\n");
-//         printf("Block Loc: %p\n", block);
-//         printf("Block Index: %d\n", block->index);
-//         printf("Block Data: %s\n", block->data);
-//         printf("Block Hash: %s\n", block->hash);
-//         printf("Block Nonce: %lld\n", block->nonce);
-//         printf("Block Time: %ld\n", block->time);
-//         printf("=====================================\n\n");
-//         block = block->next;
-//     }
-
-//     free_chain(c);
-
-//     return 0;
-// }

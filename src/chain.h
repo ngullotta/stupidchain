@@ -3,7 +3,7 @@
 
 #include "block.h"
 
-#define MAX_BLOCKS 0x100000000
+#define MAX_BLOCKS 100
 #define DIFFICULTY 2
 
 typedef struct Chain {

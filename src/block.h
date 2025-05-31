@@ -4,7 +4,6 @@
 #include <time.h>
 
 #define MAX_HASH_LEN 65
-#define MAX_TRANSACTIONS_PER_BLOCK 10
 #define MAX_BLOCK_DATA_LEN 2048
 
 typedef struct Block {
@@ -18,4 +17,5 @@ typedef struct Block {
 } Block;
 
 Block* create_block(Block* previous_block, const void *data, size_t len);
+int serialize_block(const Block* block, char* buffer, size_t buffer_size);
 #endif // BLOCK_H

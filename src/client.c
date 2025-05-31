@@ -1,68 +1,136 @@
-#include <stdio.h>      // For printf, perror
-#include <stdlib.h>     // For exit
-#include <string.h>     // For memset, strlen
-#include <unistd.h>     // For close
-#include <arpa/inet.h>  // For inet_pton
-#include <sys/socket.h> // For socket, connect, send, recv
 
-#define SERVER_IP "127.0.0.1" // The IP address of the server (localhost)
-#define PORT 8080             // The port the server is listening on
-#define BUFFER_SIZE 1024      // Size of the receive buffer
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+
+#define SERVER_IP "127.0.0.1"
+#define PORT 8080
+#define BUFFER_SIZE 4096
+#define MAX_LINE_LEN 256
+
+#define GET_BLOCKCHAIN_CMD "D"
+
+ssize_t read_line(int sock, char* buffer, size_t buffer_size) {
+    size_t i = 0;
+    ssize_t bytes_read;
+    char c;
+
+    while (i < buffer_size - 1) {
+        bytes_read = read(sock, &c, 1);
+        if (bytes_read <= 0) {
+            return bytes_read;
+        }
+        buffer[i++] = c;
+        if (c == '\n') {
+            break;
+        }
+    }
+    buffer[i] = '\0';
+    return i;
+}
 
 int main() {
     int sock = 0;
     struct sockaddr_in serv_addr;
     char buffer[BUFFER_SIZE] = {0};
-    const char *client_message = "Hello from client!";
+    char line_buffer[MAX_LINE_LEN];
 
-    // 1. Create socket file descriptor
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("socket creation error");
-        exit(EXIT_FAILURE);
-    }
-    printf("Client: Socket created (FD: %d)\n", sock);
+    printf("Enter command:\n");
+    while(1) {
+        printf("> ");
+        char client_command[50];
+        if (fgets(client_command, sizeof(client_command), stdin) == NULL) {
+            fprintf(stderr, "Error reading command.\n");
+            exit(EXIT_FAILURE);
+        }
+        client_command[strcspn(client_command, "\n")] = 0;
 
-    // Prepare the sockaddr_in structure for connecting
-    memset(&serv_addr, 0, sizeof(serv_addr)); // Clear structure
-    serv_addr.sin_family = AF_INET;           // IPv4
-    serv_addr.sin_port = htons(PORT);         // Convert port to network byte order
+        if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            perror("Socket creation error");
+            exit(EXIT_FAILURE);
+        }
 
-    // Convert IPv4 address from text to binary form
-    if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
-        perror("Invalid address/ Address not supported");
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(PORT);
+
+        if (inet_pton(AF_INET, SERVER_IP, &serv_addr.sin_addr) <= 0) {
+            perror("Invalid address/ Address not supported");
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+
+        if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+            perror("Connection Failed");
+            close(sock);
+            exit(EXIT_FAILURE);
+        }
+
+        printf("Connected to blockchain server at %s:%d\n", SERVER_IP, PORT);
+
+        if (strcmp(client_command, GET_BLOCKCHAIN_CMD) == 0) {
+
+            printf("Requesting blockchain dump...\n");
+            send(sock, GET_BLOCKCHAIN_CMD, strlen(GET_BLOCKCHAIN_CMD), 0);
+
+            ssize_t bytes_read = read_line(sock, line_buffer, sizeof(line_buffer));
+            if (bytes_read <= 0) {
+                fprintf(stderr, "Error or EOF receiving number of blocks.\n");
+                close(sock);
+                exit(EXIT_FAILURE);
+            }
+            int num_blocks = atoi(line_buffer);
+            printf("Server reports %d blocks.\n", num_blocks);
+
+            for (int i = 0; i < num_blocks; i++) {
+
+                bytes_read = read_line(sock, line_buffer, sizeof(line_buffer));
+                if (bytes_read <= 0) {
+                    fprintf(stderr, "Error or EOF receiving block %d length.\n", i);
+                    break;
+                }
+                int block_len = atoi(line_buffer);
+                printf("Receiving block %d (length %d bytes)...\n", i, block_len);
+
+                if (block_len > 0) {
+                    if (block_len >= BUFFER_SIZE) {
+                        fprintf(stderr, "Error: Received block length (%d) exceeds client buffer size (%d).\n", block_len, BUFFER_SIZE);
+                        close(sock);
+                        exit(EXIT_FAILURE);
+                    }
+                    ssize_t total_received = 0;
+                    while (total_received < block_len) {
+                        bytes_read = read(sock, buffer + total_received, block_len - total_received);
+                        if (bytes_read <= 0) {
+                            fprintf(stderr, "Error or EOF while reading block %d data.\n", i);
+                            break;
+                        }
+                        total_received += bytes_read;
+                    }
+                    buffer[total_received] = '\0';
+                    printf("--- Received Block %d ---\n%s\n----------------------\n", i, buffer);
+                } else {
+                    printf("Block %d is empty or failed to serialize on server.\n", i);
+                }
+            }
+
+            bytes_read = read(sock, buffer, BUFFER_SIZE - 1);
+            if (bytes_read > 0) {
+                buffer[bytes_read] = '\0';
+                printf("Server final response: %s\n", buffer);
+            }
+
+        } else {
+            send(sock, client_command, strlen(client_command), 0);
+            close(sock);
+            break;
+        }
+
         close(sock);
-        exit(EXIT_FAILURE);
     }
-    printf("Client: Server address prepared (%s:%d).\n", SERVER_IP, PORT);
-
-    // 2. Connect to the server
-    // This call attempts to establish a connection to the specified server.
-    // It will block until a connection is established or an error occurs.
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) == -1) {
-        perror("connection failed");
-        close(sock);
-        exit(EXIT_FAILURE);
-    }
-    printf("Client: Connected to server %s:%d.\n", SERVER_IP, PORT);
-
-    // 3. Send data to the server
-    send(sock, client_message, strlen(client_message), 0);
-    printf("Client: Sent message to server.\n");
-
-    // 4. Receive data from the server
-    ssize_t valread = recv(sock, buffer, BUFFER_SIZE, 0);
-    if (valread == -1) {
-        perror("recv failed");
-    } else if (valread == 0) {
-        printf("Client: Server disconnected.\n");
-    } else {
-        buffer[valread] = '\0'; // Null-terminate the received data
-        printf("Client: Received from server: %s\n", buffer);
-    }
-
-    // 5. Close socket
-    close(sock);
-    printf("Client: Socket closed. Client shutting down.\n");
 
     return 0;
 }
