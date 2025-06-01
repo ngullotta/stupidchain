@@ -4,118 +4,250 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <pthread.h>
 
 #include "chain.h"
 
 #define PORT 8080
 #define BUFFER_SIZE 1024
+#define SHM_NAME "shm"
+#define SHM_SIZE (1024 * 1024)
 
-int main() {
-    printf("[*] Initializing chain...\n");
-    Chain* chain = create_chain();
-    printf("[*] Chain initialized\n");
+typedef struct {
+    Chain chain;
+    pthread_mutex_t mutex;
+} SharedBlockchainData;
 
-    int server_fd, new_socket;
-    struct sockaddr_in address;
-    int opt = 1;
-    socklen_t addrlen = sizeof(address);
-    char buffer[BUFFER_SIZE] = {0};
+static SharedBlockchainData *data = NULL;
 
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("socket failed");
-        exit(EXIT_FAILURE);
+void dumpchain(int sock) {
+    pthread_mutex_lock(&data->mutex);
+
+    Chain* chain = &data->chain;
+
+    char numblocks[20];
+    snprintf(numblocks, sizeof(numblocks), "%d\n", chain->nblocks);
+    send(sock, numblocks, strlen(numblocks), 0);
+
+    for (int i = 0; i < chain->nblocks; i++) {
+        Block *block = chain->blocks[i];
+
+        if (block == NULL) {
+            fprintf(
+                stderr,
+                "[CHILD %d] Warning: NULL block found at index %d in chain.\n",
+                getpid(), i
+            );
+            continue;
+        }
+
+        char buf[0x2000];
+        int len = serialize_block(block, buf, sizeof(buf));
+
+        if (len <= 0) {
+            fprintf(
+                stderr,
+                "[CHILD %d] Warning: Serialized length is %d for block %d\n",
+                getpid(), len, i
+            );
+            continue;
+        }
+
+        char blocklen[20];
+        snprintf(blocklen, sizeof(blocklen), "%d\n", len);
+        send(sock, blocklen, strlen(blocklen), 0);
+
+        send(sock, buf, (size_t) len, 0);
     }
-    printf("[SERVER] Socket created (FD: %d)\n", server_fd);
 
-    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
-        perror("setsockopt failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
+    pthread_mutex_unlock(&data->mutex);
+}
+
+void docmd(int sock, char *cmd) {
+    if (strcmp(cmd, "dump") == 0) {
+        dumpchain(sock);
     }
-    printf("[SERVER] Socket options set.\n");
+}
 
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_addr.s_addr = INADDR_ANY;
+void handle_client(int sock) {
+    char buf[BUFFER_SIZE];
+    ssize_t valread = recv(sock, buf, BUFFER_SIZE, 0);
 
-    address.sin_port = htons(PORT);
-
-    if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) == -1) {
-        perror("bind failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
+    switch (valread) {
+        case 0:
+            printf("[CHILD %d] Client disconnected\n", getpid());
+            break;
+        case -1:
+            perror("recv failed in child");
+            break;
+        default:
+            printf(
+                "[CHILD %d] Received %lu bytes from client\n",
+                getpid(), valread
+            );
+            buf[valread] = '\0';
+            docmd(sock, buf);
     }
-    printf("[SERVER] Socket bound to port %d.\n", PORT);
 
-    if (listen(server_fd, 10) == -1) {
-        perror("listen failed");
-        close(server_fd);
-        exit(EXIT_FAILURE);
-    }
+    close(sock);
+    printf("[CHILD %d] Client socket closed\n", getpid());
+    exit(0);
+}
+
+void receive_loop(int fd) {
+    int sock;
+    struct sockaddr_in addr;
+    socklen_t addrlen = sizeof(addr);
+    pid_t pid;
+
     printf("[SERVER] Listening for incoming connections...\n");
 
     while(1) {
-        if ((new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen)) == -1) {
+        if ((sock = accept(fd, (struct sockaddr *)&addr, &addrlen)) == -1) {
             perror("accept failed");
-            close(server_fd);
-            exit(EXIT_FAILURE);
+            continue;
         }
-        printf("[SERVER] Accepted new connection (Client Socket FD: %d).\n", new_socket);
+        printf("[SERVER] Accepted new connection (Client Socket FD: %d).\n", sock);
 
-
-        ssize_t valread = recv(new_socket, buffer, BUFFER_SIZE, 0);
-        if (valread == -1) {
-            perror("recv failed");
-        } else if (valread == 0) {
-            printf("[SERVER] Client disconnected.\n");
+        pid = fork();
+        if (pid == -1) {
+            perror("fork failed");
+            close(sock);
+            continue;
+        } else if (pid == 0) {
+            close(fd);
+            handle_client(sock);
         } else {
-            buffer[valread] = '\0';
-            printf("[SERVER] Received from client: %s\n", buffer);
-
-            if (strcmp(buffer, "exit") == 0) {
-                close(new_socket);
-                printf("[SERVER] Client socket closed.\n");
-                break;
-            }
-
-
-            if (strcmp(buffer, "D") == 0) {
-                char num_blocks_str[20];
-                snprintf(num_blocks_str, sizeof(num_blocks_str), "%d\n", chain->nblocks);
-                send(new_socket, num_blocks_str, strlen(num_blocks_str), 0);
-                printf("[SERVER] Sent number of blocks: %d\n", chain->nblocks);
-                for (int i = 0; i < chain->nblocks; i++) {
-                    Block *block = chain->blocks[i];
-                    if (block == NULL) {
-                        fprintf(stderr, "Warning: NULL block found at index %d in chain.\n", i);
-                        continue;
-                    }
-
-                    char msgbuf[9128];
-                    int len = serialize_block(block, msgbuf, sizeof(msgbuf));
-
-                    if (len == 0) {
-                        fprintf(stderr, "Warning: Serialized length is 0 for block %d\n", i);
-                        continue;
-                    }
-
-                    char block_len_str[20];
-                    snprintf(block_len_str, sizeof(block_len_str), "%d\n", len);
-                    send(new_socket, block_len_str, strlen(block_len_str), 0);
-                    printf("[SERVER] Sent block %d length: %d\n", block->index, len);
-
-                    send(new_socket, msgbuf, strlen(msgbuf), 0);
-                    printf("[SERVER] Sent message to client.\n");
-                }
-                const char *response_msg = "Blockchain dump complete.";
-                send(new_socket, response_msg, strlen(response_msg), 0);
-            }
+            close(sock);
+            printf("[SERVER] Forked child process with PID: %d to handle client.\n", pid);
+            while (waitpid(-1, NULL, WNOHANG) > 0);
         }
     }
-    close(server_fd);
-    printf("[SERVER] Listening socket closed. Server shutting down.\n");
+}
 
-    free_chain(chain);
+int start_server() {
+    int server;
+    struct sockaddr_in addr;
+    int opt = 1;
+
+    if ((server = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
+        perror("socket failed");
+        return -1;
+    }
+
+    printf("[SERVER] Socket created (FD: %d)\n", server);
+
+    if (setsockopt(server, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+        perror("setsockopt failed");
+        close(server);
+        return -1;
+    }
+
+    printf("[SERVER] Socket options set.\n");
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(PORT);
+
+    if (bind(server, (struct sockaddr*) &addr, sizeof(addr)) == -1) {
+        perror("bind failed");
+        close(server);
+        return -1;
+    }
+
+    printf("[SERVER] Socket bound to port %d.\n", PORT);
+
+    if (listen(server, 10) == -1) {
+        perror("listen failed");
+        close(server);
+        return -1;
+    }
+
+    return server;
+}
+
+int main() {
+    int shm;
+
+    shm = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
+    if (shm == -1) {
+        perror("shm_open failed");
+        return EXIT_FAILURE;
+    }
+
+    printf(
+        "[*] Shared memory object created/opened: %s (FD: %d)\n",
+        SHM_NAME,
+        shm
+    );
+
+    if (ftruncate(shm, SHM_SIZE) == -1) {
+        perror("ftruncate failed");
+        shm_unlink(SHM_NAME);
+        return EXIT_FAILURE;
+    }
+
+    printf(
+        "[*] Shared memory size set to %lu bytes.\n",
+        (unsigned long) SHM_SIZE
+    );
+
+    data = (SharedBlockchainData*) mmap(
+        NULL,
+        SHM_SIZE,
+        PROT_READ | PROT_WRITE,
+        MAP_SHARED,
+        shm,
+        0
+    );
+
+    if (data == MAP_FAILED) {
+        perror("mmap failed");
+        shm_unlink(SHM_NAME);
+        return EXIT_FAILURE;
+    }
+
+    printf("[*] Shared memory mapped at addr: %p\n", (void*) data);
+
+    close(shm);
+
+    printf("[*] Initializing chain\n");
+    data->chain = *create_chain();
+
+    int server = start_server();
+    if (server == -1) {
+        fprintf(stderr, "[SERVER] Failed to start server\n");
+
+        if (data != MAP_FAILED) {
+            munmap(data, SHM_SIZE);
+        }
+        shm_unlink(SHM_NAME);
+        return EXIT_FAILURE;
+    }
+
+    receive_loop(server);
+
+    printf("[SERVER] Server shutting down\n");
+
+    close(server);
+
+    if (data != MAP_FAILED) {
+        printf("[*] Unmapping shared memory\n");
+        munmap(data, SHM_SIZE);
+    }
+
+    printf("[*] Unlinking shared memory object: %s\n", SHM_NAME);
+
+    if (shm_unlink(SHM_NAME) == -1) {
+        perror("shm_unlink failed");
+    }
+
+    while (waitpid(-1, NULL, WNOHANG) > 0);
 
     return 0;
 }
