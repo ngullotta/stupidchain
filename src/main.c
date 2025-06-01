@@ -25,6 +25,7 @@ typedef struct {
 static SharedBlockchainData *data = NULL;
 
 void dumpchain(int sock) {
+    printf("[CHILD %d] Dumping chain blocks\n", getpid());
     pthread_mutex_lock(&data->mutex);
 
     Chain* chain = &data->chain;
@@ -68,6 +69,7 @@ void dumpchain(int sock) {
 }
 
 void docmd(int sock, char *cmd) {
+    printf("[CHILD %d] Doing cmd '%s'\n", getpid());
     if (strcmp(cmd, "dump") == 0) {
         dumpchain(sock);
     }
@@ -218,6 +220,11 @@ int main() {
 
     printf("[*] Initializing chain\n");
     data->chain = *create_chain();
+    printf("[*] Chain initialized\n");
+
+    printf("[*] Initializing mutex\n");
+    pthread_mutex_init(&data->mutex, NULL);
+    printf("[*] mutex initialized\n");
 
     int server = start_server();
     if (server == -1) {
