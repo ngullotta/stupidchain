@@ -12,7 +12,7 @@
 #define BUFFER_SIZE 4096
 #define MAX_LINE_LEN 256
 
-#define GET_BLOCKCHAIN_CMD "D"
+#define GET_BLOCKCHAIN_CMD "dump"
 
 ssize_t read_line(int sock, char* buffer, size_t buffer_size) {
     size_t i = 0;
