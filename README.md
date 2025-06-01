@@ -13,7 +13,7 @@ $ make clean && make && build/server
 $ cd stupidchain
 $ build/client
 Enter command:
-> D
+> dump
 Connected to blockchain server at 127.0.0.1:8080
 Requesting blockchain dump...
 Server reports 1 blocks.
