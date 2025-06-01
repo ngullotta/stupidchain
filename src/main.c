@@ -38,7 +38,7 @@ void handle_sig(int sig) {
 
 void dumpchain(int sock) {
     printf("[CHILD %d] Dumping chain blocks\n", getpid());
-    // pthread_mutex_lock(&data->mutex);
+    pthread_mutex_lock(&data->mutex);
 
     Chain* chain = &data->chain;
 
@@ -78,7 +78,7 @@ void dumpchain(int sock) {
         send(sock, buf, (size_t) len, 0);
     }
 
-    // pthread_mutex_unlock(&data->mutex);
+    pthread_mutex_unlock(&data->mutex);
 }
 
 void docmd(int sock, char *cmd) {
