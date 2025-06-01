@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
+#include <signal.h>
 
 #include "chain.h"
 
@@ -17,6 +18,9 @@
 #define SHM_NAME "shm"
 #define SHM_SIZE (1024 * 1024)
 
+volatile sig_atomic_t running = 1;
+int server_fd = -1;
+
 typedef struct {
     Chain chain;
     pthread_mutex_t mutex;
@@ -24,9 +28,17 @@ typedef struct {
 
 static SharedBlockchainData *data = NULL;
 
+void handle_sig(int sig) {
+    printf(
+        "[SERVER] Caught signal %d. Initiating graceful shutdown...\n",
+        sig
+    );
+    running = 0;
+}
+
 void dumpchain(int sock) {
     printf("[CHILD %d] Dumping chain blocks\n", getpid());
-    pthread_mutex_lock(&data->mutex);
+    // pthread_mutex_lock(&data->mutex);
 
     Chain* chain = &data->chain;
 
@@ -35,6 +47,7 @@ void dumpchain(int sock) {
     send(sock, numblocks, strlen(numblocks), 0);
 
     for (int i = 0; i < chain->nblocks; i++) {
+        printf("Block %d\n", i);
         Block *block = chain->blocks[i];
 
         if (block == NULL) {
@@ -65,11 +78,11 @@ void dumpchain(int sock) {
         send(sock, buf, (size_t) len, 0);
     }
 
-    pthread_mutex_unlock(&data->mutex);
+    // pthread_mutex_unlock(&data->mutex);
 }
 
 void docmd(int sock, char *cmd) {
-    printf("[CHILD %d] Doing cmd '%s'\n", getpid());
+    printf("[CHILD %d] Doing cmd '%s'\n", getpid(), cmd);
     if (strcmp(cmd, "dump") == 0) {
         dumpchain(sock);
     }
@@ -108,8 +121,8 @@ void receive_loop(int fd) {
 
     printf("[SERVER] Listening for incoming connections...\n");
 
-    while(1) {
-        if ((sock = accept(fd, (struct sockaddr *)&addr, &addrlen)) == -1) {
+    while(running) {
+        if ((sock = accept(fd, (struct sockaddr*) &addr, &addrlen)) == -1) {
             perror("accept failed");
             continue;
         }
@@ -140,6 +153,8 @@ int start_server() {
         perror("socket failed");
         return -1;
     }
+
+    server_fd = server;
 
     printf("[SERVER] Socket created (FD: %d)\n", server);
 
@@ -175,6 +190,21 @@ int start_server() {
 
 int main() {
     int shm;
+
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = handle_sig;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+
+    if (sigaction(SIGINT, &sa, NULL) == -1) {
+        perror("sigaction for SIGINT failed");
+        return EXIT_FAILURE;
+    }
+    if (sigaction(SIGTERM, &sa, NULL) == -1) {
+        perror("sigaction for SIGTERM failed");
+        return EXIT_FAILURE;
+    }
 
     shm = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
     if (shm == -1) {
@@ -219,7 +249,8 @@ int main() {
     close(shm);
 
     printf("[*] Initializing chain\n");
-    data->chain = *create_chain();
+    Chain* chain = create_chain();
+    data->chain = *chain;
     printf("[*] Chain initialized\n");
 
     printf("[*] Initializing mutex\n");
@@ -255,6 +286,19 @@ int main() {
     }
 
     while (waitpid(-1, NULL, WNOHANG) > 0);
+
+    // Close the listening socket
+    if (server_fd != -1) {
+        printf("[SERVER] Closing listening socket (FD: %d).\n", server_fd);
+        close(server_fd);
+    }
+
+    // Cleanup
+    printf("[SERVER] Cleaning up...\n");
+    free_chain(chain);
+    server_fd = -1;
+    munmap(data, SHM_SIZE);
+    printf("[SERVER] Goodbye.\n");
 
     return 0;
 }
